@@ -1,0 +1,205 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-satellite_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-satellite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-satellite}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-satellite} -d ${POSTGRES_DB:-satellite_ai}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:9000/minio/health/live"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-satellite-images}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ACCESS_KEY $$MINIO_SECRET_KEY &&
+      mc mb --ignore-existing local/$$MINIO_BUCKET &&
+      echo bucket-ready
+      "
+
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ollama list >/dev/null 2>&1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      CHAT_MODEL: ${SPRING_AI_OLLAMA_CHAT_MODEL:-qwen3:4b}
+    entrypoint: >
+      /bin/sh -c "
+      ollama pull $$CHAT_MODEL &&
+      echo chat-model-ready
+      "
+    network_mode: "service:ollama"
+
+
+  ai-service:
+    build:
+      context: ./ai-service
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+
+    environment:
+      AI_SERVICE_PORT: "8000"
+
+      VLM_DEVICE: "cuda"
+      VLM_MODEL_NAME: "Qwen/Qwen3-VL-4B-Instruct"
+      VLM_LOAD_IN_4BIT: "true"
+
+      VLM_TILE_SIZE: "512"
+      VLM_MAX_TILES: "2"
+      VLM_MAX_NEW_TOKENS: "64"
+
+      HF_HOME: "/models"
+
+      NVIDIA_VISIBLE_DEVICES: "all"
+
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-satellite-images}"
+
+    ports:
+      - "${AI_SERVICE_PORT:-8000}:8000"
+
+    depends_on:
+      minio:
+        condition: service_healthy
+
+    volumes:
+      - hf_cache:/models
+
+    gpus: all
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health')); exit(0 if d.get('modelLoaded') else 1)"
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 600s
+      retries: 60
+
+  backend:
+    build:
+      context: ./backend
+
+    environment:
+      SERVER_PORT: 8080
+
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-satellite_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-satellite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-satellite}
+
+      PYTHON_AI_BASE_URL: http://ai-service:8000
+
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-satellite-images}
+
+      SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
+      SPRING_AI_OLLAMA_CHAT_MODEL: ${SPRING_AI_OLLAMA_CHAT_MODEL:-qwen3:4b}
+      SPRING_AI_OLLAMA_TEMPERATURE: ${SPRING_AI_OLLAMA_TEMPERATURE:-0.1}
+
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      minio:
+        condition: service_healthy
+
+      ai-service:
+        condition: service_healthy
+
+      ollama-init:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://127.0.0.1:8080/health"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+
+volumes:
+  postgres_data:
+  minio_data:
+  ollama_data:
+  hf_cache:

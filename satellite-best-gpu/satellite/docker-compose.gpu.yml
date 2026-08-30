@@ -1,0 +1,21 @@
+services:
+  ai-service:
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+
+    environment:
+      AI_SERVICE_PORT: "8000"
+      VLM_DEVICE: "cuda"
+      VLM_MODEL_NAME: "Qwen/Qwen3-VL-4B-Instruct"
+      VLM_LOAD_IN_4BIT: "true"
+      VLM_TILE_SIZE: "512"
+      VLM_MAX_TILES: "2"
+      VLM_MAX_NEW_TOKENS: "64"
+      HF_HOME: "/models"
+      NVIDIA_VISIBLE_DEVICES: "all"
+
+    gpus: all
+
+  ollama:
+    gpus: all

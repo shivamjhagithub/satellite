@@ -1,0 +1,1 @@
+# Assistant system prompt (Phase 26). Do not invent CRS, coordinates, or raster metadata.

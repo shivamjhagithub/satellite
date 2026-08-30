@@ -1,0 +1,25 @@
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Java / Maven
+backend/target/
+backend/.mvn/wrapper/maven-wrapper.jar
+
+# Python
+ai-service/.venv/
+ai-service/__pycache__/
+ai-service/**/__pycache__/
+ai-service/.pytest_cache/
+*.pyc
+.hf-cache/
+
+# OS / logs
+*.log
+Thumbs.db
